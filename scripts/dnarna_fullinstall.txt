@@ -1,0 +1,18 @@
+apt-get update
+apt-get install python3.6 python3-distutils curl build-essential vim git
+curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+python3 get-pip.py
+pip install virtualenv
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+apt-get install docker
+git clone 'https://github.com/Dranion/protect.git'
+cd protect/
+virtualenv --python=python3 venv
+source venv/bin/activate
+make prepare
+make special_install
+make develop
+mkdir /scratch/drkthomp/workDir
+#grab a config file that you want 
+ProTECT --config mustard_fullbam.yaml --workDir workDir jobStore |& tee errors/$(date '+%Y-%m-%d-%H-%M-%S').txt

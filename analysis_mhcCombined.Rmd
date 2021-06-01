@@ -1,0 +1,490 @@
+---
+title: "Run Comparison"
+date: "Last compiled on `r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+#library("plyr")
+library("Biostrings")
+library("rjson")
+library("readr")
+library(tidyverse)
+library(eulerr)
+library(gridExtra)
+library(pander)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+library(mygene)
+library(dplyr)
+```
+
+Comparing these runs: 
+```{r Variable Set, echo=FALSE}
+runsToCompare <-
+  c("CHR6_NOVAR", "CHR6_SUBTRACTED", "CHR6_NOVAR_SUBTRACTED")
+pander(runsToCompare)
+baseline <- "CHR6_NOVAR"
+mainCompare <- "CHR6_SUBTRACTED"
+
+```
+
+# Comparing Expressions
+If the runs are for the same patients, this should ideally be identical. 
+```{r Expression Functions, message=FALSE, warning=FALSE, include=FALSE}
+getExpression = function(base, fileType) {
+  return(arrange_all(read.delim(
+    paste(
+      base,
+      "expression",
+      paste("rsem", fileType, "results", sep = "."),
+      sep = "/"
+    )
+  )))
+}
+```
+## Isoforms
+```{r Expression Isoforms, echo=TRUE}
+relIsoVals <-
+  c("length",
+    "effective_length",
+    "expected_count",
+    "TPM",
+    "FPKM",
+    "IsoPct")
+toRun <-
+  parse(text = paste0("getExpression('", runsToCompare, "', 'isoforms')"))
+for (i in seq_along(toRun))
+  assign(paste0("expressionIsoforms.", runsToCompare[i]), eval(toRun[[i]]))
+isoforms <- mget(ls(pattern = "^expressionIsoforms.*")) %>%
+  bind_rows(.id = "patients") %>% group_by(patients)
+isoforms %>%  pivot_wider(names_from = patients, values_from = relIsoVals)
+isoforms %>% summarise(
+  length = mean(length),
+  effective_length = mean(effective_length),
+  expected_count = mean(expected_count),
+  TPM = mean(TPM),
+  FPKM = mean(FPKM),
+  IsPct = mean(IsoPct)
+)
+```
+
+## Genes
+```{r Expression Genes, echo=TRUE}
+relGeneVals <-
+  c("length", "effective_length", "expected_count", "TPM", "FPKM")
+toRun <-
+  parse(text = paste0("getExpression('", runsToCompare, "', 'genes')"))
+for (i in seq_along(toRun))
+  assign(paste0("expressionGenes.", runsToCompare[i]), eval(toRun[[i]]))
+genes <- mget(ls(pattern = "^expressionGenes.*")) %>%
+  bind_rows(.id = "patients") %>% group_by(patients)
+genes %>% summarise(
+  length = mean(length),
+  effective_length = mean(effective_length),
+  expected_count = mean(expected_count),
+  TPM = mean(TPM),
+  FPKM = mean(FPKM)
+)
+```
+
+# Comparing Binding
+```{r Binding Functions, echo=TRUE, message=TRUE,results="asis"}
+getBindingMHC = function(base, fileType){
+    fileName <-
+    paste(base,
+          "binding_predictions",
+          paste0(fileType, "_merged_files.list"),
+          sep = "/")
+  if (file.exists(fileName)) {
+    binding <- read.delim(fileName, header = FALSE)
+    names(binding) <-
+      c(
+        "allele",
+        "pept",
+        "normal_pept",
+        "pname",
+        "core",
+        "zero",
+        "tumor_pred",
+        "normal_pred",
+        "ENSG",
+        "gene",
+        "ENST"
+      )
+    return( separate_rows(arrange_all(binding),ENST, sep=","))
+  }
+  
+}
+getBinding = function(base) {
+  return(rbind(getBindingMHC(base, 'mhci'), getBindingMHC(base, 'mhcii')))
+}
+compareClass = function() {
+  toRun <- parse(text = paste0("getBinding('", runsToCompare, "')"))
+  header <- paste0("binding", ".")
+  for (i in seq_along(toRun))
+    assign(paste0(header, runsToCompare[i]), eval(toRun[[i]]))
+  fullList <- mget(ls(pattern = paste0('^', header, '.*')))
+  return(fullList) 
+}
+getGeneInfo = function(geneList){
+  
+}
+compareBindingGene = function(fullList, mhcClass){
+  
+}
+
+closeCompareBinding = function(fullList, comparison, mhcClass){
+    uniqueMHC <- fullList
+    for( i in seq_along(uniqueMHC)){
+      uniqueMHC[i] <- unique(uniqueMHC[[i]][comparison])
+    }
+    test <- euler(uniqueMHC, shape = "ellipse")
+    grid.arrange(grobs = list(
+      plot(euler(uniqueMHC, shape = "ellipse"),
+           fills=list(fill=c("#b3c6e7", "#f2f2f2", "#de425b"),alpha=0.8),
+           edges=list(lty=1,edges=c("#90a0ba", "#dadada", "#ab3346"),alpha=0.9),
+           quantities = list(type=c("counts", "percent"), round=2, cex=0.8),
+           adjust_labels=TRUE,
+           legend = list(labels=c("RNA/DNA ProTECT", "\nRNA/DNA ProTECT\n(with Gnomad Subtracted)", "\nRNA-only ProTECT\n(with Gnomad Subtracted)")),
+           main=paste(mhcClass, comparison, "Comparison") )))
+    baseMHC <- uniqueMHC[[paste0("binding", ".", baseline)]]
+    compMHC <- uniqueMHC[[paste0("binding", ".", mainCompare)]]
+    writeLines("\n#### Difference\n")
+    writeLines(setdiff(baseMHC, compMHC))
+    writeLines("\n#### Intersect\n")
+    writeLines(intersect(baseMHC,compMHC))
+  }
+ 
+```
+
+```{r binding prediction mhci, echo=TRUE, message=TRUE}
+mhcClass <- 'MHCI and MHCII'
+mhciBindingList <- compareClass()
+mhciBindingList %>% 
+    bind_rows(.id = "patients") %>% 
+    mutate(patients = str_remove_all(patients, paste0("binding", mhcClass, "."))) %>% 
+    mutate(patients = str_remove_all(patients, "_chr6")) %>%
+    mutate(patients = str_remove_all(patients, "variants_")) %>% group_by(patients) %>% 
+  summarise(
+    number = n(),
+    tumor_pred = mean(tumor_pred),
+    normal_pred = mean(normal_pred, na.rm = TRUE),
+    diff = mean(tumor_pred - normal_pred)
+  )
+```
+### Gene 
+```{r, echo=TRUE, message=TRUE}
+closeCompareBinding(mhciBindingList, 'gene', mhcClass)
+```
+### ENST 
+```{r, echo=TRUE, message=TRUE}
+closeCompareBinding(mhciBindingList, 'ENST', mhcClass)
+
+```
+
+# Comparing Peptides
+```{r compare Peptides funcation, echo=TRUE}
+
+# get peptides 
+getPeptide=function(base,tumor,number){
+  file <- paste(base, "peptides", paste("transgened",tumor, number, "mer_peptides.faa", sep="_"), sep="/")
+  table <- read_csv(toString(gsub(">", "\n",  readLines(file))),col_names=FALSE)[1:2]
+  return(arrange_all(table))
+}
+
+peptideCompare=function(type, pep){
+  
+    toRun <- parse(text=paste0("getPeptide('", runsToCompare, "','", type, "', '", pep, "')"))
+    header <- paste0(type, pep) 
+    for(i in seq_along(toRun)){
+      assign(paste(header, runsToCompare[i], sep="."), eval(toRun[[i]]))
+    }
+    fullList <- mget(ls(pattern = paste0('^', header, '.*')))
+    peptides <- c()
+    for(i in seq_along(fullList)){
+      peptides[names(fullList)[i]] <- unique(fullList[[i]][2])
+    }
+    grid.arrange(grobs = list(
+      plot(euler(peptides, shape = "ellipse"), 
+           fills=list(fill=c("#b3c6e7", "#f2f2f2", "#de425b"),alpha=0.8),
+           edges=list(lty=1,edges=c("#90a0ba", "#dadada", "#ab3346"),alpha=0.9),
+           quantities = list(type=c("counts", "percent"), round=2, cex=0.8),
+           adjust_labels=TRUE,
+           legend = list(labels=c("RNA/DNA ProTECT", "\nRNA/DNA ProTECT\n(with Gnomad Subtracted)", "\nRNA-only ProTECT\n(with Gnomad Subtracted)")),
+           main=paste(type, pep, "Comparison") )))
+    print(setdiff(get(paste0(header, ".", baseline)), get(paste0(header,".",mainCompare))))
+    assign(header, mget(ls(pattern = paste0('^', header, '.*'))) %>% bind_rows(.id = "patients")) 
+
+}
+```
+
+## Normal Types 
+
+### 9
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("normal", "9")
+```
+
+### 10
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("normal", "10")
+```
+
+### 15
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("normal", "15")
+```
+
+## Tumor Types 
+
+### 9
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("tumor", "9")
+```
+
+### 10
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("tumor", "10")
+```
+
+### 15
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("tumor", "15")
+```
+
+```{r eval=FALSE, include=FALSE}
+# peptide map
+getPeptideMap=function(base,tumor,number){
+  file <- paste(base1, "peptides", paste("transgened",tumor, number, "mer_peptides.faa", sep="_"), sep="/")
+}
+#comparePeptides(base1, base2)
+```
+
+
+# Comparing Ranks
+```{r compareRank, echo=TRUE, message=TRUE}
+# get rankboost
+getRank=function(base, detail){
+  if(detail=="concise"){
+    fileEnd <- "tsv"
+  }
+  else if(detail=="detailed"){
+    fileEnd <- "txt"
+  }
+  return(arrange_all(bind_rows(read.delim(paste(base, "rankboost", paste('mhci', "rankboost", detail, paste0("results.",fileEnd),sep="_"), sep="/")),read.delim(paste(base, "rankboost", paste('mhcii', "rankboost", detail, paste0("results.",fileEnd),sep="_"), sep="/")),.id="mhc")))
+}
+onlyValid <- runsToCompare
+  level <- "concise"
+  base <- "CHR6_NOVAR"
+    toRun <- parse(text=paste0("getRank('", onlyValid, "', '", level, "')"))
+    for(i in seq_along(runsToCompare)){
+      tryCatch({ assign(paste0(level, ".",onlyValid[i]), eval(toRun[[i]]))},
+               error = function(err) {
+            # error handler picks up where error was generated
+            print(paste("Problem with",level,onlyValid[i]))
+        })
+    }
+    
+    rankings <- mget(ls(pattern=paste0("^", level, ".*")))
+    for(var in c("HUGO_gene", "IAR_sequence","binding_MHCs")){
+      rankboosts <- c()
+      for(i in seq_along(rankings)){
+        rankboosts[names(rankings)[i]] <- unique(rankings[[i]][var])
+      }
+      assign(var,rankboosts)
+     grid.arrange(grobs = list(
+      plot(euler(rankboosts, shape = "ellipse"), 
+           fills=list(fill=c("#b3c6e7", "#f2f2f2", "#de425b"),alpha=0.8),
+           edges=list(col=c("#90a0ba", "#dadada", "#ab3346"),alpha=0.9),
+           quantities = list(type=c("counts", "percent"), round=2, cex=0.8),
+           adjust_labels=TRUE,
+           legend = list(labels=c("RNA/DNA ProTECT", "\nRNA/DNA ProTECT\n(with Gnomad Subtracted)", "\nRNA-only ProTECT\n(with Gnomad Subtracted)")),
+           main=paste(level, var, "Comparison") )))      
+     print(rankboosts)
+    }
+
+```
+```{r bumpPlot}
+
+compareVar <- "HUGO_gene"
+firstComp <- "NOVAR"
+secondComp <- "SUBTRACTED"
+
+bumpData <- bind_rows(rankings, .id="src") %>% mutate(src = str_remove_all(src, "concise.CHR6_"))%>% filter(src==firstComp|src==secondComp) %>% filter(mutations != "FUSION")
+
+bumpData <- bumpData %>% 
+  mutate(flag = ifelse(get(compareVar) %in% intersect(filter(bumpData,src==firstComp)[,compareVar], filter(bumpData,src==secondComp)[,compareVar]), TRUE, FALSE),
+         compare_col = if_else(flag == TRUE, get(compareVar), "zzz"))
+bumpData
+
+
+#theme from https://dominikkoch.github.io/Bump-Chart/
+bumpTheme <- function() {
+
+  # Colors
+  color.background = "white"
+  color.text = "#22211d"
+
+  # Begin construction of chart
+  theme_bw(base_size=15) +
+
+    # Format background colors
+    theme(panel.background = element_rect(fill=color.background,
+                                          color=color.background)) +
+    theme(plot.background  = element_rect(fill=color.background,
+                                          color=color.background)) +
+    theme(panel.border     = element_rect(color=color.background)) +
+    theme(strip.background = element_rect(fill=color.background,
+                                          color=color.background)) +
+
+    # Format the grid
+    theme(panel.grid.major.y = element_blank()) +
+    theme(panel.grid.minor.y = element_blank()) +
+    theme(axis.ticks       = element_blank()) +
+
+    # Format the legend
+    theme(legend.position = "none") +
+
+    # Format title and axis labels
+    theme(plot.title       = element_blank()) +
+    theme(axis.title.x     = element_blank()) +
+    theme(axis.title.y     = element_blank()) +
+    theme(axis.text.x      = element_text(size=10, vjust=0.5, hjust=0.5,
+                                          color = color.text)) +
+    theme(axis.text.y      =element_blank()) +
+    theme(strip.text       = element_text(face = "bold")) +
+
+    # Plot margins
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+}
+
+
+
+
+mainPlot <- ggplot(bumpData, aes(x = src, y = boosted_rank, group = get(compareVar))) +
+  geom_line(aes(color = compare_col, alpha = 1), size = 2) +
+  geom_point(aes(color = compare_col, alpha = 1), size = 4) +
+  facet_grid(. ~ mhc,scales = "free",space="free",labeller = as_labeller(c("1" = "MHCI Genes by Boosted Rank
+", "2" = "MHCII Genes by Boosted Rank
+"))) +
+  scale_y_reverse(breaks = 1:nrow(bumpData)) 
+
+firstTheme <- mainPlot + 
+  theme(legend.position = 'none') +
+  geom_text(data = bumpData %>% filter(src == firstComp & flag),
+            aes(label = get(compareVar), x = 0.9,color=compare_col) , hjust = "right",
+            fontface = "bold",  size = 3.7) +
+  geom_text(data = bumpData %>% filter(src == secondComp & flag),
+            aes(label = get(compareVar), x = 2.1,color=compare_col) , hjust = "left",
+            fontface = "bold",  size = 3.7) +
+    geom_text(data = bumpData %>% filter(src == firstComp & !flag),
+            aes(label = get(compareVar), x = 0.9,color=compare_col) , hjust = "right",
+            fontface = "bold",  size = 2) +
+  geom_text(data = bumpData %>% filter(src == secondComp & !flag),
+            aes(label = get(compareVar), x = 2.1,color=compare_col) , hjust = "left",
+            fontface = "bold",  size = 2) +
+  bumpTheme() +
+  scale_x_discrete(labels=c("RNA/DNA ProTect","RNA-only ProTect")) +
+   scale_color_manual(values = c("#2f5496", "#2f5496","#2f5496", "#2f5496" ,"#999999"))
+
+firstTheme
+
+ggsave("bumpPlot.png",width=8.625,height=4.125)
+
+
+```
+
+
+```{r}
+falseneg_genes <- c("RREB1", "HIVEP1", "ATXN1", "VARS2", "CCHCR1", "VWA7", "TAPBP", "KIFC1", "XPO5", "ENPP5", "CENPQ", "EFHC1", "DST","CD24")
+falseneg_genes <- c(unique(filter(bumpData, src == "NOVAR" & !flag)$HUGO_gene))
+
+falseneg <- mainPlot + 
+  theme(legend.position = 'none') +
+  geom_text(data = bumpData %>% filter(!flag & src == "NOVAR"),
+            aes(label = get(compareVar), x = 0.9), color="#990000" , hjust = "right",
+            fontface = "bold",  size = 3.7) +
+     geom_text(data = bumpData %>% filter(flag & src == "NOVAR"),
+            aes(label = get(compareVar), x = 0.9),color="#999999" , hjust = "right",
+            fontface = "bold",  size = 2) +
+  geom_text(data = bumpData %>% filter(src == "SUBTRACTED"),
+            aes(label = get(compareVar), x = 2.1),color="#999999" , hjust = "left",
+            fontface = "bold",  size = 2) +
+  bumpTheme() +
+  scale_x_discrete(labels=c("RNA/DNA ProTect","RNA-only ProTect")) + scale_color_manual(values = c("#999999", "#999999","#999999","#999999","#999999"))
+falseneg
+
+falseneg_stats <- rankings$concise.CHR6_NOVAR %>% filter(HUGO_gene %in% falseneg_genes) %>% relocate(c(epitope_name.s.,IAR_sequence), .after = binding_MHCs) %>% relocate(c(boosted_rank,HUGO_gene), .before=mhc) %>% arrange(boosted_rank)
+falseneg_stats
+write_csv(falseneg_stats, "falseneg_stats.csv")
+```
+
+```{r}
+falsepos_genes <- unique(filter(bumpData, src == "SUBTRACTED" & !flag)$HUGO_gene)
+
+
+falsepos <- mainPlot + 
+  theme(legend.position = 'none') +
+  geom_text(data = bumpData %>% filter(!flag & src == "NOVAR"),
+            aes(label = get(compareVar), x = 0.9), color="#999999" , hjust = "right",
+            fontface = "bold",  size = 2) +
+     geom_text(data = bumpData %>% filter(flag & src == "NOVAR"),
+            aes(label = get(compareVar), x = 0.9),color="#999999" , hjust = "right",
+            fontface = "bold",  size = 2) +
+  geom_text(data = bumpData %>% filter(flag & src == "SUBTRACTED"),
+            aes(label = get(compareVar), x = 2.1),color="#999999" , hjust = "left",
+            fontface = "bold",  size = 2) +
+   geom_text(data = bumpData %>% filter(!flag & src == "SUBTRACTED"),
+            aes(label = get(compareVar), x = 2.1),color="#0b5394" , hjust = "left",
+            fontface = "bold",  size = 3.6) +
+  bumpTheme() +
+  scale_x_discrete(labels=c("RNA/DNA ProTect","RNA-only ProTect")) + scale_color_manual(values = c("#999999", "#999999","#999999","#999999","#999999"))
+falsepos
+
+falsepos_stats <- rankings$concise.CHR6_SUBTRACTED %>% filter(HUGO_gene %in% falsepos_genes) %>% relocate(c(epitope_name.s.,IAR_sequence), .after = binding_MHCs) %>% relocate(c(boosted_rank,HUGO_gene), .before=mhc) %>% arrange(boosted_rank)
+falsepos_stats
+```
+
+
+```{r}
+falseneg_genes <- c("RREB1", "HIVEP1", "ATXN1", "VARS2", "CCHCR1", "VWA7", "TAPBP", "KIFC1", "XPO5", "ENPP5", "CENPQ", "EFHC1", "DST","CD24")
+falseneg <- mainPlot + 
+  theme(legend.position = 'none') +
+  geom_text(data = bumpData %>% filter(HUGO_gene %in% falseneg_genes & src == "NOVAR"),
+            aes(label = get(compareVar), x = 0.9), color="#2f5496" , hjust = "right",
+            fontface = "bold",  size = 3.7) +
+   geom_text(data = bumpData %>% filter(HUGO_gene %in% falseneg_genes & src == "SUBTRACTED"),
+             aes(label = get(compareVar), x = 2.1),color="#96542f", hjust = "left",
+             fontface = "bold",  size = 3.7) +
+    geom_text(data = bumpData %>% filter(!(HUGO_gene %in% falseneg_genes) & src == "NOVAR"),
+            aes(label = get(compareVar), x = 0.9),color="#999999" , hjust = "right",
+            fontface = "bold",  size = 2) +
+  geom_text(data = bumpData %>% filter(!(HUGO_gene %in% falseneg_genes) & src == "SUBTRACTED"),
+            aes(label = get(compareVar), x = 2.1),color="#999999" , hjust = "left",
+            fontface = "bold",  size = 2) +
+  bumpTheme() +
+  scale_x_discrete(labels=c("RNA/DNA ProTect","RNA-only ProTect"))
+falseneg
+falseneg_stats <- rankings$concise.CHR6_NOVAR %>% filter(HUGO_gene %in% falseneg_genes) %>% relocate(c(epitope_name.s.,IAR_sequence), .after = binding_MHCs) %>% relocate(c(boosted_rank,HUGO_gene), .before=mhc) %>% arrange(boosted_rank)
+write_csv(falseneg_stats, "falseneg_stats.csv")
+```
+
+
+
+```{r include=FALSE}
+write_rds(mhciBindingList, file = "mhcBindingList.rds")
+
+
+file.copy(from = "analysis.pdf", 
+          to = paste0('analysis_',lubridate::today(),'_',paste0(lubridate::hour(lubridate::now()), 
+          lubridate::minute(lubridate::now())),'.pdf'))
+``` 
+
+
+

@@ -1,0 +1,54 @@
+---
+title: "ProTECT Result Comparisons"
+output: html_notebook
+---
+
+```{r Library Installation}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("variants")
+
+library(DiagrammeR) #installs mermaid
+```
+
+ProTECT outputs a couple different outputs that we're interested in comparing.
+
+```{r ProTECT Diagram, echo=FALSE}
+DiagrammeR("
+   flowchart LR
+   input[[Input]]
+   subgraph a [Alignment and Haplotyping]
+   tdh['Haplotype from DNA (T)'] 
+  ndh['Haplotype from DNA (N)'] 
+  rh['Haplotype from RNA'] 
+  tdh & ndh & rh --> haplotype[Consensus Haplotype]
+  
+  dta['DNA (T) Alignment']
+  dna['DNA (N) Alignment']
+  ra['RNA Alignment']
+  end
+  subgraph calling [Mutation Calling and Expression Estimation]
+    dta & dna --> Indel & SNV
+  ra --> SNV & fusion[Gene Expression] & Expression
+  end
+  subgraph annotation [Mutation Annotation]
+  Indel & SNV --> SNPeff 
+  end
+  subgraph translation [Mutation translation]
+  SNPeff --> Transgene
+  fusion & Expression--> Transgene
+  end
+  subgraph MHC [pMHC binding prediction]
+  haplotype & Transgene ---> binding[MHCI and MHCII alelle binding frequencies]
+  end
+  subgraph ranking [Ranking and reporting]
+  binding & Expression --> Rankboost
+  haplotype & Expression --> pathway[MHC Pathway Assessment] & therapy[Feasibility of therapies]
+  end
+ ")
+```
+
+
+
+
+

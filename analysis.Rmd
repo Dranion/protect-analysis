@@ -1,0 +1,334 @@
+---
+title: "Run Comparison"
+date: "Last compiled on `r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+#library("plyr")
+library("Biostrings")
+library("rjson")
+library("readr")
+library(tidyverse)
+library(eulerr)
+library(gridExtra)
+library(pander)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+library(mygene)
+library(dplyr)
+```
+
+Comparing these runs: 
+```{r Variable Set, echo=FALSE}
+runsToCompare <-
+  c("CHR6_NOVAR", "CHR6_SUBTRACTED")
+pander(runsToCompare)
+baseline <- "CHR6_NOVAR"
+mainCompare <- "CHR6_SUBTRACTED"
+
+```
+
+# Comparing Expressions
+If the runs are for the same patients, this should ideally be identical. 
+```{r Expression Functions, message=FALSE, warning=FALSE, include=FALSE}
+getExpression = function(base, fileType) {
+  return(arrange_all(read.delim(
+    paste(
+      base,
+      "expression",
+      paste("rsem", fileType, "results", sep = "."),
+      sep = "/"
+    )
+  )))
+}
+```
+## Isoforms
+```{r Expression Isoforms, echo=TRUE}
+relIsoVals <-
+  c("length",
+    "effective_length",
+    "expected_count",
+    "TPM",
+    "FPKM",
+    "IsoPct")
+toRun <-
+  parse(text = paste0("getExpression('", runsToCompare, "', 'isoforms')"))
+for (i in seq_along(toRun))
+  assign(paste0("expressionIsoforms.", runsToCompare[i]), eval(toRun[[i]]))
+isoforms <- mget(ls(pattern = "^expressionIsoforms.*")) %>%
+  bind_rows(.id = "patients") %>% group_by(patients)
+isoforms %>%  pivot_wider(names_from = patients, values_from = relIsoVals)
+isoforms %>% summarise(
+  length = mean(length),
+  effective_length = mean(effective_length),
+  expected_count = mean(expected_count),
+  TPM = mean(TPM),
+  FPKM = mean(FPKM),
+  IsPct = mean(IsoPct)
+)
+```
+
+## Genes
+```{r Expression Genes, echo=TRUE}
+relGeneVals <-
+  c("length", "effective_length", "expected_count", "TPM", "FPKM")
+toRun <-
+  parse(text = paste0("getExpression('", runsToCompare, "', 'genes')"))
+for (i in seq_along(toRun))
+  assign(paste0("expressionGenes.", runsToCompare[i]), eval(toRun[[i]]))
+genes <- mget(ls(pattern = "^expressionGenes.*")) %>%
+  bind_rows(.id = "patients") %>% group_by(patients)
+genes %>% summarise(
+  length = mean(length),
+  effective_length = mean(effective_length),
+  expected_count = mean(expected_count),
+  TPM = mean(TPM),
+  FPKM = mean(FPKM)
+)
+```
+
+# Comparing Binding
+```{r Binding Functions, echo=TRUE, message=TRUE,results="asis"}
+getBinding = function(base, fileType) {
+  fileName <-
+    paste(base,
+          "binding_predictions",
+          paste0(fileType, "_merged_files.list"),
+          sep = "/")
+  if (file.exists(fileName)) {
+    binding <- read.delim(fileName, header = FALSE)
+    names(binding) <-
+      c(
+        "allele",
+        "pept",
+        "normal_pept",
+        "pname",
+        "core",
+        "zero",
+        "tumor_pred",
+        "normal_pred",
+        "ENSG",
+        "gene",
+        "ENST"
+      )
+    return( separate_rows(arrange_all(binding),ENST, sep=","))
+  }
+}
+compareClass = function(mhcClass) {
+  toRun <- parse(text = paste0("getBinding('", runsToCompare, "', '", mhcClass, "')"))
+  header <- paste0("binding", mhcClass, ".")
+  for (i in seq_along(toRun))
+    assign(paste0(header, runsToCompare[i]), eval(toRun[[i]]))
+  fullList <- mget(ls(pattern = paste0('^', header, '.*')))
+  return(fullList) 
+}
+getGeneInfo = function(geneList){
+  
+}
+compareBindingGene = function(fullList, mhcClass){
+  
+}
+
+closeCompareBinding = function(fullList, comparison, mhcClass){
+    uniqueMHC <- fullList
+    for( i in seq_along(uniqueMHC)){
+      uniqueMHC[i] <- unique(uniqueMHC[[i]][comparison])
+    }
+    test <- euler(uniqueMHC, shape = "ellipse")
+    grid.arrange(grobs = list(
+      plot(euler(uniqueMHC, shape = "ellipse"), quantities = TRUE, legend = TRUE )),
+      top = paste(mhcClass, comparison, "Comparison"))
+    baseMHC <- uniqueMHC[[paste0("binding", mhcClass, ".", baseline)]]
+    compMHC <- uniqueMHC[[paste0("binding", mhcClass, ".", mainCompare)]]
+    writeLines("\n#### Difference\n")
+    writeLines(setdiff(baseMHC, compMHC))
+    writeLines("\n#### Intersect\n")
+    writeLines(intersect(baseMHC,compMHC))
+  }
+ 
+```
+
+## MHCI
+```{r binding prediction mhci, echo=TRUE, message=TRUE}
+mhcClass <- 'mhci'
+mhciBindingList <- compareClass(mhcClass)
+mhciBindingList %>% 
+    bind_rows(.id = "patients") %>% 
+    mutate(patients = str_remove_all(patients, paste0("binding", mhcClass, "."))) %>% 
+    mutate(patients = str_remove_all(patients, "_chr6")) %>%
+    mutate(patients = str_remove_all(patients, "variants_")) %>% group_by(patients) %>% 
+  summarise(
+    number = n(),
+    tumor_pred = mean(tumor_pred),
+    normal_pred = mean(normal_pred, na.rm = TRUE),
+    diff = mean(tumor_pred - normal_pred)
+  )
+```
+### Gene 
+```{r, echo=TRUE, message=TRUE}
+closeCompareBinding(mhciBindingList, 'gene', mhcClass)
+```
+### ENST 
+```{r, echo=TRUE, message=TRUE}
+closeCompareBinding(mhciBindingList, 'ENST', mhcClass)
+```
+
+## MHCII
+```{r binding prediction mhcii, echo=TRUE, message=TRUE}
+mhcClass <- 'mhcii'
+mhciiBindingList <- compareClass(mhcClass)
+mhciiBindingList %>%  
+    bind_rows(.id = "patients") %>% 
+    mutate(patients = str_remove_all(patients, paste0("binding", mhcClass, "."))) %>% 
+    mutate(patients = str_remove_all(patients, "_chr6")) %>%
+    mutate(patients = str_remove_all(patients, "variants_")) %>% group_by(patients) %>% summarise(
+    number = n(),
+    tumor_pred = mean(tumor_pred),
+    normal_pred = mean(normal_pred, na.rm = TRUE),
+    diff = mean(tumor_pred - normal_pred)
+  )
+```
+### Gene 
+```{r, echo=TRUE, message=TRUE}
+closeCompareBinding(mhciiBindingList, 'gene', mhcClass)
+```
+### ENST 
+```{r, echo=TRUE, message=TRUE}
+closeCompareBinding(mhciiBindingList, 'ENST', mhcClass)
+```
+
+# Comparing Peptides
+```{r compare Peptides funcation, echo=TRUE}
+
+# get peptides 
+getPeptide=function(base,tumor,number){
+  file <- paste(base, "peptides", paste("transgened",tumor, number, "mer_peptides.faa", sep="_"), sep="/")
+  table <- read_csv(toString(gsub(">", "\n",  readLines(file))),col_names=FALSE)[1:2]
+  return(arrange_all(table))
+}
+
+peptideCompare=function(type, pep){
+  
+    toRun <- parse(text=paste0("getPeptide('", runsToCompare, "','", type, "', '", pep, "')"))
+    header <- paste0(type, pep) 
+    for(i in seq_along(toRun)){
+      assign(paste(header, runsToCompare[i], sep="."), eval(toRun[[i]]))
+    }
+    fullList <- mget(ls(pattern = paste0('^', header, '.*')))
+    peptides <- c()
+    for(i in seq_along(fullList)){
+      peptides[names(fullList)[i]] <- unique(fullList[[i]][2])
+    }
+    grid.arrange(grobs = list(
+      plot(euler(peptides, shape = "ellipse"), quantities = TRUE, legend = TRUE )),
+      top = paste(type, pep, "Comparison"))
+    print(setdiff(get(paste0(header, ".", baseline)), get(paste0(header,".",mainCompare))))
+    assign(header, mget(ls(pattern = paste0('^', header, '.*'))) %>% bind_rows(.id = "patients")) 
+
+}
+```
+
+## Normal Types 
+
+### 9
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("normal", "9")
+```
+
+### 10
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("normal", "10")
+```
+
+### 15
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("normal", "15")
+```
+
+## Tumor Types 
+
+### 9
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("tumor", "9")
+```
+
+### 10
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("tumor", "10")
+```
+
+### 15
+```{r echo=FALSE, warning=FALSE}
+peptideCompare("tumor", "15")
+```
+
+```{r eval=FALSE, include=FALSE}
+# peptide map
+getPeptideMap=function(base,tumor,number){
+  file <- paste(base1, "peptides", paste("transgened",tumor, number, "mer_peptides.faa", sep="_"), sep="/")
+}
+#comparePeptides(base1, base2)
+```
+
+
+# Comparing Ranks
+```{r compareRank, echo=TRUE, message=TRUE}
+# get rankboost
+getRank=function(base,fileType, detail){
+  if(detail=="concise"){
+    fileEnd <- "tsv"
+  }
+  else if(detail=="detailed"){
+    fileEnd <- "txt"
+  }
+  return(arrange_all(read.delim(paste(base, "rankboost", paste(fileType, "rankboost", detail, paste0("results.",fileEnd),sep="_"), sep="/"))))
+ 
+}
+onlyValid <- runsToCompare
+for(class in c("mhci", "mhcii")){
+  level <- "concise"
+    toRun <- parse(text=paste0("getRank('", onlyValid, "','", class, "', '", level, "')"))
+    for(i in seq_along(runsToCompare)){
+      tryCatch({ assign(paste0(class, level, ".",onlyValid[i]), eval(toRun[[i]]))},
+               error = function(err) {
+            # error handler picks up where error was generated
+            print(paste("Problem with",class,level,onlyValid[i]))
+        })
+    }
+    
+    fullList <- mget(ls(pattern=paste0("^", class, level, ".*")))
+    for(var in c("HUGO_gene", "IAR_sequence","binding_MHCs")){
+      rankboosts <- c()
+      for(i in seq_along(fullList)){
+        rankboosts[names(fullList)[i]] <- unique(fullList[[i]][var])
+      }
+      grid.arrange(grobs = list(
+        plot(euler(rankboosts, shape = "ellipse"), quantities = TRUE, legend = TRUE )),
+        top = paste(class, level, var, "Comparison"))
+      print(rankboosts)
+    }
+    
+    assign(paste0(class, level), fullList %>% bind_rows(.id = "patients"))
+    
+}
+
+
+```
+```{r include=FALSE}
+write_rds(mhciBindingList, file = "mhciBindingList.rds")
+write_rds(mhciiBindingList, file = "mhciiBindingList.rds")
+
+
+file.copy(from = "analysis.pdf", 
+          to = paste0('analysis_',lubridate::today(),'_',paste0(lubridate::hour(lubridate::now()), 
+          lubridate::minute(lubridate::now())),'.pdf'))
+``` 
+
+
+
